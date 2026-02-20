@@ -23,6 +23,11 @@
 */
 
 #include <rtl_433_ESP.h>
+#include <Adafruit_NeoPixel.h>
+#include "esp32-hal-timer.h"
+
+hw_timer_t *timer = NULL;  // declaration of timer
+
 
 #include "receiver.h"
 #include "signalDecoder.h"
@@ -127,11 +132,28 @@ static byte receiverGpio = -1;
 
 static TaskHandle_t rtl_433_ReceiverHandle;
 
+// When setting up the NeoPixel library, we tell it how many pixels,
+// and which pin to use to send signals. Note that for older NeoPixel
+// strips you might need to change the third parameter -- see the
+// strandtest example for more information on possible values.
+Adafruit_NeoPixel pixels(1, ONBOARD_LED, NEO_GRB + NEO_KHZ800);
+
+
+// function call by the timer interruption
+void IRAM_ATTR onTimer() {
+    pixels.setPixelColor(0, pixels.Color(0, 10, 0));
+    pixels.show();
+     // Stop and free timer
+    timerEnd(timer);
+    timer = NULL;
+}
+
 /*----------------------------- End of variable initialization -----------------------------*/
 
 rtl_433_ESP::rtl_433_ESP() {
   _pulseTrains = (pulse_data_t*)heap_caps_calloc(
       RECEIVER_BUFFER_SIZE, sizeof(pulse_data_t), MALLOC_CAP_INTERNAL);
+  pixels.begin();
 }
 
 /**
@@ -180,8 +202,8 @@ void rtl_433_ESP::initReceiver(byte inputPin, float receiveFrequency) {
   radio.setFrequency(receiveFrequency);
   resetReceiver();
 #ifdef ONBOARD_LED
-  pinMode(ONBOARD_LED, OUTPUT);
-  digitalWrite(ONBOARD_LED, LOW);
+  //pinMode(ONBOARD_LED, OUTPUT);
+  //digitalWrite(ONBOARD_LED, LOW);
 #endif
 
   if (ookModulation) {
@@ -211,7 +233,7 @@ void rtl_433_ESP::initReceiver(byte inputPin, float receiveFrequency) {
     state = radio.SPIsetRegValue(RADIOLIB_CC1101_REG_MDMCFG3, 0x93); // Data rate
     RADIOLIB_STATE(state, "set MDMCFG3");
 
-    state = radio.SPIsetRegValue(RADIOLIB_CC1101_REG_MDMCFG4, 0x07); // Bandwidth
+    state = radio.SPIsetRegValue(RADIOLIB_CC1101_REG_MDMCFG4, 0xC7); // Bandwidth
     RADIOLIB_STATE(state, "set MDMCFG4");
   } else {
     // From https://github.com/matthias-bs/BresserWeatherSensorReceiver/issues/41#issuecomment-1458166772
@@ -330,6 +352,9 @@ void rtl_433_ESP::initReceiver(byte inputPin, float receiveFrequency) {
         &rtl_433_ReceiverHandle, /* Task handle. */
         rtl_433_ReceiverTask_Core); /* Core where the task should run */
   }
+
+  pixels.setPixelColor(0, pixels.Color(0, 10, 0));
+  pixels.show();
 }
 
 /**
@@ -563,7 +588,20 @@ void rtl_433_ESP::rtl_433_ReceiverTask(void* pvParameters) {
           receiveMode = true;
           signalStart = micros();
 #ifdef ONBOARD_LED
-          digitalWrite(ONBOARD_LED, HIGH);
+          pixels.setPixelColor(0, pixels.Color(10, 0, 0));
+          pixels.show();
+
+          if (timer == NULL)
+          {
+            // Timer initialisation at a frequency of 1 MHz (1 µs per tick)
+            timer = timerBegin(1000000);   
+            // Attaches the interrupt function to the timer
+            timerAttachInterrupt(timer, &onTimer);
+            // Configure an alarm to trigger the interrupt every 100 ms (100000 µs)    timerAlarm(timer, 100000, true, 0);  // 1000000 µs = 100ms = 0.1s
+            // Start of the timer
+            timerAlarm(timer, 10000000, false, 0);
+          }
+          //digitalWrite(ONBOARD_LED, HIGH);
 #endif
           signalRssi = currentRssi;
           _lastChange = micros();
@@ -605,7 +643,9 @@ void rtl_433_ESP::rtl_433_ReceiverTask(void* pvParameters) {
         if (receiveMode) // Complete reception of a signal
         {
 #ifdef ONBOARD_LED
-          digitalWrite(ONBOARD_LED, LOW);
+          //digitalWrite(ONBOARD_LED, LOW);
+          //pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+          //pixels.show();
 #endif
           receiveMode = false;
           totalSignals++;
@@ -631,6 +671,10 @@ void rtl_433_ESP::rtl_433_ReceiverTask(void* pvParameters) {
             gapStart = micros();
             _actualPulseTrain = (_actualPulseTrain + 1) % RECEIVER_BUFFER_SIZE;
             _nrpulses = 0;
+
+
+            pixels.setPixelColor(0, pixels.Color(0, 0, 100));
+            pixels.show();
           } else {
             ignoredSignals++;
 #ifdef DEMOD_DEBUG
@@ -658,6 +702,7 @@ void rtl_433_ESP::rtl_433_ReceiverTask(void* pvParameters) {
       }
     }
     vTaskDelay(1);
+
   }
 }
 
